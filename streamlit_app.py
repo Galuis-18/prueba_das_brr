@@ -1,19 +1,3 @@
-"""
-Dashboard de Reclutamiento - Conectado a Airtable
-Autor: Tu Nombre
-Fecha: 2024
-
-Instalación requerida:
-pip install streamlit pyairtable pandas plotly python-dotenv
-
-Configuración:
-1. Crea archivo .env con:
-   AIRTABLE_API_KEY=tu_api_key
-   AIRTABLE_BASE_ID=tu_base_id
-   
-2. Ejecuta: streamlit run dashboard.py
-"""
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
