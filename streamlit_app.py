@@ -543,3 +543,6 @@ def main():
         render_dashboard_semanal(reclutador, metricas_diarias, metricas_semanales, metas)
     else:
         render_dashboard_mensual(reclutador, metricas_semanales, metas)
+
+if __name__ == "__main__":
+    main()
