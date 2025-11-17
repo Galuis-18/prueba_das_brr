@@ -171,7 +171,7 @@ def render_dashboard_diario(reclutador, metricas_diarias, metas, config_dias):
     ]
     
     # Obtener meta y días laborables
-    meta_semanal = metas[metas['Reclutador'] == reclutador]['Firmaron'].values[0] if not metas.empty else 25
+    meta_semanal = metas[metas['Reclutador'] == reclutador]['Firmaron'].values[0] if not metas.empty else 2
     dias_laborables = config_dias[config_dias['Reclutador'] == reclutador]['Dias_Generales'].values[0] if not config_dias.empty else 5
     meta_diaria = meta_semanal / dias_laborables
     
