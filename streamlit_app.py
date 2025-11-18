@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 from pyairtable import Api
+import os
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
