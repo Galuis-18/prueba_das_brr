@@ -21,8 +21,8 @@ st.set_page_config(
 # Cambia esto a False cuando tengas tus credenciales de Airtable listas
 USAR_MOCK_DATA = False
 
-AIRTABLE_API_KEY = "TU_API_KEY_AQUI"
-BASE_ID = "TU_BASE_ID_AQUI"
+AIRTABLE_API_KEY = os.getenv('AIRTABLE_API_KEY')
+BASE_ID = os.getenv('AIRTABLE_BASE_ID')
 TABLE_DIARIO = "Metricas"
 TABLE_SEMANAL = "Metricas_semanales"
 TABLE_MENSUAL = "Metricas_mensuales"
