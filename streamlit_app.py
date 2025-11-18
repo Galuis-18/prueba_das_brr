@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import numpy as np
 from pyairtable import Api
 import os
+from dotenv import load_dotenv
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
