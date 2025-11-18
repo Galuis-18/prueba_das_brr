@@ -67,7 +67,7 @@ st.markdown("""
 # FUNCIONES DE CONEXIÓN A AIRTABLE
 # ============================================================================
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=30000)
 def get_airtable_data(table_name):
     """Conecta a Airtable y obtiene los datos de una tabla"""
     try:
