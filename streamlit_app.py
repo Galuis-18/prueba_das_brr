@@ -85,14 +85,14 @@ def get_airtable_data(table_name):
 
 def get_metricas_diarias():
     """Obtiene datos de la tabla metricas_diarias"""
-    df = get_airtable_data('metricas_diarias')
+    df = get_airtable_data('Metricas')
     if not df.empty and 'Fecha' in df.columns:
         df['Fecha'] = pd.to_datetime(df['Fecha'])
     return df
 
 def get_metricas_semanales():
     """Obtiene datos de la tabla metricas_semanales"""
-    df = get_airtable_data('metricas_semanales')
+    df = get_airtable_data('Metricas_semanales')
     if not df.empty:
         # Intentar convertir columna de fecha si existe
         if 'Fecha_Inicio' in df.columns:
@@ -103,7 +103,7 @@ def get_metricas_semanales():
 
 def get_metas_semanales():
     """Obtiene datos de la tabla metas_semanales"""
-    return get_airtable_data('metas_semanales')
+    return get_airtable_data('Metas_semanales')
 
 def get_config_dias_laborables():
     """Obtiene configuración de días laborables"""
