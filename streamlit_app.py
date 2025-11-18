@@ -1,377 +1,1012 @@
+"""
+Dashboard de Reclutamiento - Conectado a Airtable
+Versión de Testing (Sin Autenticación)
+
+Instalación requerida:
+pip install streamlit pyairtable pandas plotly python-dotenv
+
+Configuración:
+1. Crea archivo .env con:
+   AIRTABLE_API_KEY=tu_api_key
+   AIRTABLE_BASE_ID=tu_base_id
+   
+2. Ejecuta: streamlit run dashboard.py
+"""
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import numpy as np
 from pyairtable import Api
+from datetime import datetime, timedelta
+import os
+from dotenv import load_dotenv
 
-# ==========================================
-# CONFIGURACIÓN DE LA PÁGINA
-# ==========================================
+# Cargar variables de entorno
+load_dotenv()
+
+# Configuración de la página
 st.set_page_config(
-    page_title="Dashboard Reclutamiento",
+    page_title="Dashboard de Reclutamiento",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# CONFIGURACIÓN DE CONEXIÓN (LLENAR ESTO)
-# ==========================================
-# Cambia esto a False cuando tengas tus credenciales de Airtable listas en st.secrets
-USAR_MOCK_DATA = False 
+# CSS personalizado
+st.markdown("""
+<style>
+    .metric-card {
+        background-color: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-top: 4px solid;
+        height: 100%;
+    }
+    .metric-value {
+        font-size: 32px;
+        font-weight: bold;
+        margin: 10px 0;
+    }
+    .metric-label {
+        font-size: 12px;
+        color: #64748b;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .metric-subtitle {
+        font-size: 14px;
+        color: #94a3b8;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Nombres de las tablas en Airtable
-TABLE_DIARIO = "Metricas"
-TABLE_SEMANAL = "Metricas_semanales"
-TABLE_MENSUAL = "Metricas_mensuales"
+# ============================================================================
+# FUNCIONES DE CONEXIÓN A AIRTABLE
+# ============================================================================
 
-# Cargar credenciales de forma segura desde st.secrets
-if not USAR_MOCK_DATA:
+@st.cache_data(ttl=300)
+def get_airtable_data(table_name):
+    """Conecta a Airtable y obtiene los datos de una tabla"""
     try:
-        # Asegúrate de configurar estos secretos en tu dashboard de Streamlit
-        AIRTABLE_API_KEY = st.secrets["AIRTABLE_API_KEY"]
-        BASE_ID = st.secrets["BASE_ID"]
-    except Exception as e:
-        st.error("⚠️ Error: No se encontraron las credenciales en los secretos de Streamlit.")
-        st.info("Asegúrate de configurar AIRTABLE_API_KEY y BASE_ID en la sección de Secrets de tu app o en .streamlit/secrets.toml")
-        st.stop()
-else:
-    # Valores temporales para modo prueba (no se usan realmente si MOCK es True)
-    AIRTABLE_API_KEY = "dummy_key"
-    BASE_ID = "dummy_base"
-
-# Rubros principales
-RUBROS_METRICAS = [
-    'Publicaciones', 'Contactos', 'Citas', 'Entrevistas', 
-    'Aceptados', 'Rechazados', 'Aceptaron', 'Induccion', 'Firmaron'
-]
-
-# Rubros clave para KPIs destacados
-KPI_PRINCIPALES = ['Publicaciones', 'Aceptados', 'Rechazados', 'Aceptaron', 'Firmaron']
-
-# ==========================================
-# FUNCIONES DE CARGA DE DATOS
-# ==========================================
-
-def generar_datos_mock():
-    """Genera datos falsos para probar la app sin conexión a Airtable"""
-    reclutadores = ['Ana', 'Carlos', 'Sofia', 'David']
-    fechas = pd.date_range(start='2025-10-01', end='2025-11-20', freq='D')
-    
-    # 1. Datos Diarios
-    data_diaria = []
-    for r in reclutadores:
-        for f in fechas:
-            # Simulación aleatoria pero un poco realista
-            es_fin_de_semana = f.weekday() >= 5
-            factor = 0.1 if es_fin_de_semana else 1.0
-            
-            row = {
-                'Reclutador': r,
-                'Fecha': f,
-                'Publicaciones': int(np.random.randint(0, 5) * factor),
-                'Contactos': int(np.random.randint(5, 20) * factor),
-                'Citas': int(np.random.randint(2, 8) * factor),
-                'Entrevistas': int(np.random.randint(1, 6) * factor),
-                'Aceptados': int(np.random.choice([0, 1], p=[0.9, 0.1]) * factor),
-                'Rechazados': int(np.random.randint(0, 3) * factor),
-                'Aceptaron': int(np.random.choice([0, 1], p=[0.95, 0.05]) * factor),
-                'Induccion': int(np.random.choice([0, 1], p=[0.95, 0.05]) * factor),
-                'Firmaron': int(np.random.choice([0, 1], p=[0.98, 0.02]) * factor),
-            }
-            data_diaria.append(row)
-    df_diario = pd.DataFrame(data_diaria)
-    
-    # 2. Datos Semanales (Agrupando diario para coherencia)
-    df_diario['Semana'] = df_diario['Fecha'].dt.isocalendar().week
-    df_semanal = df_diario.groupby(['Reclutador', 'Semana'])[RUBROS_METRICAS].sum().reset_index()
-    
-    # 3. Datos Mensuales
-    df_diario['Mes'] = df_diario['Fecha'].dt.strftime('%Y-%m')
-    df_mensual = df_diario.groupby(['Reclutador', 'Mes'])[RUBROS_METRICAS].sum().reset_index()
-    
-    return df_diario, df_semanal, df_mensual
-
-@st.cache_data(ttl=14400) # Actualización cada 4 horas
-def cargar_datos():
-    if USAR_MOCK_DATA:
-        return generar_datos_mock()
-    
-    try:
-        api = Api(AIRTABLE_API_KEY)
-        table_d = api.table(BASE_ID, TABLE_DIARIO)
-        table_s = api.table(BASE_ID, TABLE_SEMANAL)
-        table_m = api.table(BASE_ID, TABLE_MENSUAL)
+        api = Api(os.getenv('AIRTABLE_API_KEY'))
+        table = api.table(os.getenv('AIRTABLE_BASE_ID'), table_name)
+        records = table.all()
         
-        # Convertir a DataFrame
-        df_d = pd.DataFrame([r['fields'] for r in table_d.all()])
-        df_s = pd.DataFrame([r['fields'] for r in table_s.all()])
-        df_m = pd.DataFrame([r['fields'] for r in table_m.all()])
+        data = [record['fields'] for record in records]
+        df = pd.DataFrame(data)
         
-        # Asegurar tipos de datos
-        df_d['Fecha'] = pd.to_datetime(df_d['Fecha'])
-        # Llenar NaNs con 0
-        df_d[RUBROS_METRICAS] = df_d[RUBROS_METRICAS].fillna(0)
-        df_s[RUBROS_METRICAS] = df_s[RUBROS_METRICAS].fillna(0)
-        df_m[RUBROS_METRICAS] = df_m[RUBROS_METRICAS].fillna(0)
-        
-        return df_d, df_s, df_m
-        
+        return df
     except Exception as e:
         st.error(f"Error conectando a Airtable: {e}")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame()
 
-# ==========================================
-# LÓGICA DE NEGOCIO: CÁLCULO DE METAS
-# ==========================================
-def calcular_metas_semanales(df_semanal_historico):
-    """Calcula la meta basada en el promedio de las últimas 2 semanas"""
-    df = df_semanal_historico.copy()
-    df = df.sort_values(by=['Reclutador', 'Semana'])
-    
-    # Lógica de Rolling Window (2 semanas)
-    metas = df.groupby('Reclutador')[RUBROS_METRICAS].apply(
-        lambda x: x.rolling(window=2).mean().shift(1)
-    ).reset_index(level=0, drop=True)
-    
-    # Unir metas al DF original
-    df_con_metas = df.join(metas, rsuffix='_Meta')
-    
-    # REGLA DE NEGOCIO: Aceptados y Firmados meta fija de 1
-    if 'Aceptados_Meta' in df_con_metas.columns:
-        df_con_metas['Aceptados_Meta'] = 1
-    if 'Firmaron_Meta' in df_con_metas.columns:
-        df_con_metas['Firmaron_Meta'] = 1
-        
-    # Llenar NaNs al principio (primeras semanas) con 0 o promedios globales
-    cols_meta = [c for c in df_con_metas.columns if '_Meta' in c]
-    df_con_metas[cols_meta] = df_con_metas[cols_meta].fillna(0)
-    
-    return df_con_metas
+def get_metricas_diarias():
+    """Obtiene datos de la tabla metricas_diarias"""
+    df = get_airtable_data('metricas_diarias')
+    if not df.empty and 'Fecha' in df.columns:
+        df['Fecha'] = pd.to_datetime(df['Fecha'])
+    return df
 
-# ==========================================
-# INTERFAZ DE USUARIO
-# ==========================================
+def get_metricas_semanales():
+    """Obtiene datos de la tabla metricas_semanales"""
+    df = get_airtable_data('metricas_semanales')
+    if not df.empty:
+        # Intentar convertir columna de fecha si existe
+        if 'Fecha_Inicio' in df.columns:
+            df['Fecha_Inicio'] = pd.to_datetime(df['Fecha_Inicio'])
+        elif 'Fecha' in df.columns:
+            df['Fecha'] = pd.to_datetime(df['Fecha'])
+    return df
 
-# Cargar datos
-df_diario, df_semanal, df_mensual = cargar_datos()
+def get_metas_semanales():
+    """Obtiene datos de la tabla metas_semanales"""
+    return get_airtable_data('metas_semanales')
 
-if df_diario.empty:
-    st.warning("No hay datos para mostrar. Revisa la conexión o activa el modo MOCK.")
-    st.stop()
+def get_config_dias_laborables():
+    """Obtiene configuración de días laborables"""
+    return get_airtable_data('config_dias_laborables')
 
-# --- SIDEBAR: Filtros ---
-st.sidebar.header("Filtros")
-opcion_reclutador = st.sidebar.selectbox(
-    "Seleccionar Reclutador",
-    ["Todos"] + list(df_diario['Reclutador'].unique())
-)
+# ============================================================================
+# FUNCIONES DE CÁLCULO
+# ============================================================================
 
-# Filtrado de DataFrames según selección
-if opcion_reclutador != "Todos":
-    df_diario_view = df_diario[df_diario['Reclutador'] == opcion_reclutador]
-    df_semanal_view = df_semanal[df_semanal['Reclutador'] == opcion_reclutador]
-    df_mensual_view = df_mensual[df_mensual['Reclutador'] == opcion_reclutador]
-else:
-    # Si es "Todos", agrupamos por fecha/semana para ver el total del departamento
-    df_diario_view = df_diario.groupby('Fecha')[RUBROS_METRICAS].sum().reset_index()
-    # Para el semanal necesitamos mantener estructura para calcular metas promedio del equipo
-    # Ojo: Para simplificar la meta de equipo, sumaremos las metas individuales si es "Todos"
-    df_semanal_view = df_semanal.copy() 
-    df_mensual_view = df_mensual.groupby('Mes')[RUBROS_METRICAS].sum().reset_index()
+def calcular_efectividad(firmados, meta):
+    """Calcula el porcentaje de efectividad"""
+    if meta == 0:
+        return 0
+    return round((firmados / meta) * 100, 1)
 
-# --- TÍTULO ---
-st.title("🚀 Dashboard de Rendimiento - Reclutamiento")
-st.markdown(f"Viendo datos de: **{opcion_reclutador}**")
+def calcular_productividad(firmados, contactos):
+    """Calcula productividad (Firmados/Contactos)"""
+    if contactos == 0:
+        return 0
+    return round((firmados / contactos) * 100, 1)
 
-# --- PESTAÑAS ---
-tab1, tab2, tab3 = st.tabs(["📅 Seguimiento Diario", "🎯 Avance Semanal vs Metas", "📈 Histórico Mensual"])
+def calcular_calidad(firmados, entrevistas):
+    """Calcula calidad (Firmados/Entrevistas)"""
+    if entrevistas == 0:
+        return 0
+    return round((firmados / entrevistas) * 100, 1)
 
-# ==========================================
-# TAB 1: SEGUIMIENTO DIARIO
-# ==========================================
-with tab1:
-    st.subheader("Actividad del Día")
-    
-    # Obtener fecha más reciente (para simular "hoy" si los datos son viejos)
-    fecha_hoy = df_diario_view['Fecha'].max()
-    datos_hoy = df_diario_view[df_diario_view['Fecha'] == fecha_hoy]
-    
-    # Selector de fecha por si quieren ver días pasados
-    fecha_selec = st.date_input("Seleccionar fecha", value=fecha_hoy)
-    datos_dia_selec = df_diario_view[df_diario_view['Fecha'] == pd.to_datetime(fecha_selec)]
-    
-    if not datos_dia_selec.empty:
-        # Calcular totales del día
-        metrics_dia = datos_dia_selec[KPI_PRINCIPALES].sum()
-        
-        cols = st.columns(len(KPI_PRINCIPALES))
-        for idx, metric in enumerate(KPI_PRINCIPALES):
-            val = int(metrics_dia[metric])
-            cols[idx].metric(label=metric, value=val)
+def proyeccion_semanal(acumulado, dias_transcurridos, dias_totales):
+    """Calcula proyección para fin de semana"""
+    if dias_transcurridos == 0:
+        return 0
+    return round((acumulado / dias_transcurridos) * dias_totales, 0)
+
+def get_color_efectividad(efectividad):
+    """Retorna color según nivel de efectividad"""
+    if efectividad >= 90:
+        return "#10b981"
+    elif efectividad >= 75:
+        return "#f59e0b"
     else:
-        st.info(f"No hay actividad registrada para el {fecha_selec}")
+        return "#ef4444"
 
-    st.divider()
-    
-    # Gráfico de tendencia diaria (últimos 30 días)
-    st.subheader("Tendencia de Actividad (Últimos 30 días)")
-    df_30_dias = df_diario_view[df_diario_view['Fecha'] >= (fecha_hoy - timedelta(days=30))]
-    
-    fig_line = px.line(
-        df_30_dias, 
-        x='Fecha', 
-        y=['Publicaciones', 'Entrevistas', 'Contactos'],
-        markers=True,
-        title="Evolución Diaria de Métricas Clave"
-    )
-    st.plotly_chart(fig_line, use_container_width=True)
+# ============================================================================
+# FUNCIONES PARA SELECCIÓN DE PERIODOS
+# ============================================================================
 
-# ==========================================
-# TAB 2: AVANCE SEMANAL Y METAS
-# ==========================================
-with tab2:
-    st.subheader("Cumplimiento de Metas Semanales")
+def get_periodos_disponibles(df, tipo='diario'):
+    """Obtiene los periodos disponibles según el tipo de dashboard"""
+    if df.empty:
+        return []
     
-    # 1. Calcular Metas (Usando lógica de promedio móvil)
-    # Si estamos viendo "Todos", primero calculamos metas individuales y luego sumamos
-    df_metas_calculadas = calcular_metas_semanales(df_semanal)
+    if tipo == 'diario':
+        if 'Fecha' in df.columns:
+            fechas = sorted(df['Fecha'].dt.date.unique(), reverse=True)
+            return fechas
+    elif tipo == 'semanal':
+        if 'Semana' in df.columns:
+            semanas = sorted(df['Semana'].unique(), reverse=True)
+            return semanas
+        elif 'Fecha_Inicio' in df.columns:
+            semanas = sorted(df['Fecha_Inicio'].dt.isocalendar().week.unique(), reverse=True)
+            return semanas
+        elif 'Fecha' in df.columns:
+            semanas = sorted(df['Fecha'].dt.isocalendar().week.unique(), reverse=True)
+            return semanas
+    elif tipo == 'mensual':
+        if 'Fecha_Inicio' in df.columns:
+            meses = df['Fecha_Inicio'].dt.to_period('M').unique()
+            return sorted([str(m) for m in meses], reverse=True)
+        elif 'Fecha' in df.columns:
+            meses = df['Fecha'].dt.to_period('M').unique()
+            return sorted([str(m) for m in meses], reverse=True)
     
-    # Obtener semana actual (basada en última fecha de datos)
-    semana_actual = df_diario['Fecha'].max().isocalendar().week
+    return []
+
+def filtrar_por_periodo(df, periodo_seleccionado, tipo='diario'):
+    """Filtra el dataframe según el periodo seleccionado"""
+    if df.empty:
+        return df
     
-    # Filtrar datos de la semana actual
-    if opcion_reclutador != "Todos":
-        df_actual_metas = df_metas_calculadas[
-            (df_metas_calculadas['Reclutador'] == opcion_reclutador) & 
-            (df_metas_calculadas['Semana'] == semana_actual)
-        ]
+    if tipo == 'diario':
+        return df[df['Fecha'].dt.date == periodo_seleccionado]
+    elif tipo == 'semanal':
+        if 'Semana' in df.columns:
+            return df[df['Semana'] == periodo_seleccionado]
+        else:
+            return df[df['Fecha'].dt.isocalendar().week == periodo_seleccionado]
+    elif tipo == 'mensual':
+        periodo = pd.Period(periodo_seleccionado)
+        if 'Fecha_Inicio' in df.columns:
+            return df[df['Fecha_Inicio'].dt.to_period('M') == periodo]
+        else:
+            return df[df['Fecha'].dt.to_period('M') == periodo]
+    
+    return df
+
+# ============================================================================
+# COMPONENTES DE UI
+# ============================================================================
+
+def render_kpi_card(titulo, valor, subtitulo, color, icono="📊"):
+    """Renderiza una tarjeta KPI"""
+    st.markdown(f"""
+    <div class="metric-card" style="border-top-color: {color}">
+        <div class="metric-label">{icono} {titulo}</div>
+        <div class="metric-value" style="color: {color}">{valor}</div>
+        <div class="metric-subtitle">{subtitulo}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ============================================================================
+# DASHBOARD DE DEPARTAMENTO
+# ============================================================================
+
+def render_dashboard_departamento(metricas_diarias, metricas_semanales, metas):
+    """Renderiza el dashboard general del departamento"""
+    st.title("🏢 Dashboard de Departamento")
+    st.markdown("**Vista general del desempeño del equipo completo**")
+    
+    # Selector de periodo
+    col_periodo1, col_periodo2 = st.columns([1, 3])
+    
+    with col_periodo1:
+        tipo_periodo = st.selectbox(
+            "Ver por:",
+            ["Semana Actual", "Mes Actual", "Últimos 30 días", "Histórico"],
+            key="dept_periodo"
+        )
+    
+    # Filtrar datos según periodo
+    hoy = datetime.now().date()
+    
+    if tipo_periodo == "Semana Actual":
+        inicio_periodo = hoy - timedelta(days=hoy.weekday())
+        datos_periodo = metricas_diarias[metricas_diarias['Fecha'].dt.date >= inicio_periodo]
+        titulo_periodo = f"Semana del {inicio_periodo.strftime('%d/%m')} al {hoy.strftime('%d/%m/%Y')}"
+    elif tipo_periodo == "Mes Actual":
+        inicio_periodo = hoy.replace(day=1)
+        datos_periodo = metricas_diarias[metricas_diarias['Fecha'].dt.date >= inicio_periodo]
+        titulo_periodo = f"Mes de {hoy.strftime('%B %Y')}"
+    elif tipo_periodo == "Últimos 30 días":
+        inicio_periodo = hoy - timedelta(days=30)
+        datos_periodo = metricas_diarias[metricas_diarias['Fecha'].dt.date >= inicio_periodo]
+        titulo_periodo = "Últimos 30 días"
     else:
-        # Sumar metas y reales de todo el equipo para la semana actual
-        df_semana_all = df_metas_calculadas[df_metas_calculadas['Semana'] == semana_actual]
-        cols_nums = RUBROS_METRICAS + [c for c in df_semana_all.columns if '_Meta' in c]
-        df_actual_metas = df_semana_all[cols_nums].sum().to_frame().T
+        datos_periodo = metricas_diarias
+        titulo_periodo = "Histórico completo"
     
-    if not df_actual_metas.empty:
-        # Mostrar KPIs principales con Barras de Progreso
-        st.markdown(f"#### Semana #{semana_actual}")
-        
-        # Calcular días transcurridos de la semana (1=Lunes, 7=Domingo)
-        # Esto sirve para la proyección
-        dia_semana_num = df_diario['Fecha'].max().isocalendar().weekday
-        # Evitar división por cero
-        dia_semana_num = max(1, dia_semana_num) 
-        
-        for kpi in KPI_PRINCIPALES:
-            col1, col2 = st.columns([1, 3])
-            
-            actual = df_actual_metas[kpi].values[0]
-            meta = df_actual_metas[f"{kpi}_Meta"].values[0]
-            
-            # Cálculo de Proyección
-            # Si llevamos 3 días y tengo 10, proyecto (10/3)*6 dias laborales
-            proyeccion = (actual / dia_semana_num) * 6 if dia_semana_num < 6 else actual
-            
-            delta = actual - meta
-            color_delta = "normal" # Streamlit decide verde/rojo basado en signo
-            
-            # Estado de la tendencia
-            estado_tendencia = "🟢 En camino" if proyeccion >= meta else "🔴 Riesgo"
-            if meta == 0: estado_tendencia = "⚪ Sin Meta"
-            
-            with col1:
-                st.metric(
-                    label=f"**{kpi}** (Meta: {meta:.1f})", 
-                    value=int(actual), 
-                    delta=f"{delta:.1f}",
-                    help=f"Proyección al cierre de semana: {proyeccion:.1f}"
-                )
-                st.caption(f"Tendencia: {estado_tendencia}")
-            
-            with col2:
-                # Barra de progreso visual con Plotly Bullet Chart
-                fig_bullet = go.Figure(go.Indicator(
-                    mode = "number+gauge+delta",
-                    value = actual,
-                    domain = {'x': [0, 1], 'y': [0, 1]},
-                    title = {'text': ""},
-                    delta = {'reference': meta, 'position': "top"},
-                    gauge = {
-                        'shape': "bullet",
-                        'axis': {'range': [0, max(meta * 1.5, actual * 1.1, 10)]},
-                        'threshold': {
-                            'line': {'color': "red", 'width': 2},
-                            'thickness': 0.75,
-                            'value': meta
-                        },
-                        'bar': {'color': "#2E86C1"}, # Azul corporativo
-                        'steps': [
-                            {'range': [0, meta], 'color': "#E5E8E8"},
-                            {'range': [meta, max(meta * 1.5, actual * 1.1, 10)], 'color': "#D5F5E3"} # Verde suave zona meta
-                        ]
-                    }
-                ))
-                fig_bullet.update_layout(height=80, margin={'t':10, 'b':10, 'l':10, 'r':10})
-                st.plotly_chart(fig_bullet, use_container_width=True)
-            
-            st.divider()
-            
-        # Tabla detallada de todos los rubros
-        with st.expander("Ver tabla detallada de todos los rubros (Semana Actual)"):
-            st.dataframe(df_actual_metas.style.highlight_max(axis=0))
-            
-    else:
-        st.warning("No hay datos suficientes para calcular las metas de esta semana.")
-
-# ==========================================
-# TAB 3: HISTÓRICO MENSUAL
-# ==========================================
-with tab3:
-    st.subheader("Rendimiento Mensual")
+    with col_periodo2:
+        st.info(f"📅 {titulo_periodo}")
     
+    if datos_periodo.empty:
+        st.warning("No hay datos para el periodo seleccionado")
+        return
+    
+    # Calcular métricas generales
+    total_reclutadores = datos_periodo['Reclutador'].nunique()
+    total_firmados = datos_periodo['Firmaron'].sum() if 'Firmaron' in datos_periodo.columns else 0
+    total_contactos = datos_periodo['Contactos'].sum() if 'Contactos' in datos_periodo.columns else 0
+    total_entrevistas = datos_periodo['Entrevistas'].sum() if 'Entrevistas' in datos_periodo.columns else 0
+    
+    # Meta total del departamento
+    meta_total = metas['Firmaron'].sum() if not metas.empty and 'Firmaron' in metas.columns else 0
+    efectividad_dept = calcular_efectividad(total_firmados, meta_total)
+    productividad_dept = calcular_productividad(total_firmados, total_contactos)
+    calidad_dept = calcular_calidad(total_firmados, total_entrevistas)
+    
+    # KPIs del departamento
+    st.markdown("### 📊 KPIs del Departamento")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        render_kpi_card(
+            "RECLUTADORES",
+            f"{total_reclutadores}",
+            "Activos en el periodo",
+            "#3b82f6",
+            "👥"
+        )
+    
+    with col2:
+        render_kpi_card(
+            "TOTAL FIRMADOS",
+            f"{int(total_firmados)}",
+            f"Meta: {int(meta_total)}",
+            get_color_efectividad(efectividad_dept),
+            "✅"
+        )
+    
+    with col3:
+        render_kpi_card(
+            "EFECTIVIDAD",
+            f"{efectividad_dept}%",
+            "Del departamento",
+            get_color_efectividad(efectividad_dept),
+            "🎯"
+        )
+    
+    with col4:
+        render_kpi_card(
+            "PRODUCTIVIDAD",
+            f"{productividad_dept}%",
+            "Firmados/Contactos",
+            "#10b981" if productividad_dept >= 15 else "#f59e0b",
+            "💪"
+        )
+    
+    with col5:
+        render_kpi_card(
+            "CALIDAD",
+            f"{calidad_dept}%",
+            "Conversión final",
+            "#10b981" if calidad_dept >= 50 else "#f59e0b",
+            "⭐"
+        )
+    
+    st.markdown("---")
+    
+    # Gráficos comparativos
     col_graf1, col_graf2 = st.columns(2)
     
     with col_graf1:
-        # Gráfico de Barras: Comparativa de Rubros por Mes
-        rubros_selec = st.multiselect("Seleccionar Rubros para Graficar", RUBROS_METRICAS, default=['Publicaciones', 'Contactos'])
+        st.subheader("📊 Ranking por Reclutador")
         
-        fig_bar = px.bar(
-            df_mensual_view, 
-            x='Mes', 
-            y=rubros_selec, 
-            barmode='group',
-            title="Volumen Mensual por Rubro",
-            text_auto=True
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # Agrupar por reclutador
+        columnas_agg = {}
+        if 'Firmaron' in datos_periodo.columns:
+            columnas_agg['Firmaron'] = 'sum'
+        if 'Contactos' in datos_periodo.columns:
+            columnas_agg['Contactos'] = 'sum'
+        if 'Entrevistas' in datos_periodo.columns:
+            columnas_agg['Entrevistas'] = 'sum'
         
+        if columnas_agg:
+            ranking = datos_periodo.groupby('Reclutador').agg(columnas_agg).reset_index()
+            
+            # Calcular efectividad individual
+            def calc_efectividad_individual(row):
+                reclutador = row['Reclutador']
+                firmados = row.get('Firmaron', 0)
+                meta_rec = metas[metas['Reclutador'] == reclutador]['Firmaron'].values[0] if not metas[metas['Reclutador'] == reclutador].empty else 25
+                return calcular_efectividad(firmados, meta_rec)
+            
+            ranking['Efectividad'] = ranking.apply(calc_efectividad_individual, axis=1)
+            ranking = ranking.sort_values('Firmaron', ascending=True)
+            
+            # Gráfico de barras
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                y=ranking['Reclutador'],
+                x=ranking['Firmaron'],
+                orientation='h',
+                marker_color=[get_color_efectividad(e) for e in ranking['Efectividad']],
+                text=ranking['Firmaron'],
+                textposition='auto',
+                hovertemplate='<b>%{y}</b><br>Firmados: %{x}<br>Efectividad: %{customdata}%<extra></extra>',
+                customdata=ranking['Efectividad']
+            ))
+            
+            fig.update_layout(
+                height=400,
+                xaxis_title="Firmados",
+                yaxis_title="",
+                showlegend=False,
+                hovermode='closest'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos suficientes para el ranking")
+    
     with col_graf2:
-        # Embudo de conversión (Simplificado)
-        # Sumamos todo el histórico visible
-        totales = df_mensual_view.sum(numeric_only=True)
+        st.subheader("📈 Evolución Diaria del Departamento")
         
-        data_funnel = {
-            'Etapa': ['Contactos', 'Entrevistas', 'Aceptados', 'Firmaron'],
-            'Cantidad': [
-                totales.get('Contactos', 0),
-                totales.get('Entrevistas', 0),
-                totales.get('Aceptados', 0),
-                totales.get('Firmaron', 0)
-            ]
-        }
-        fig_funnel = px.funnel(
-            data_funnel, 
-            x='Cantidad', 
-            y='Etapa',
-            title="Embudo de Conversión Histórico"
+        if 'Fecha' in datos_periodo.columns:
+            # Agrupar por fecha
+            columnas_evol = {}
+            if 'Firmaron' in datos_periodo.columns:
+                columnas_evol['Firmaron'] = 'sum'
+            if 'Contactos' in datos_periodo.columns:
+                columnas_evol['Contactos'] = 'sum'
+            if 'Publicaciones' in datos_periodo.columns:
+                columnas_evol['Publicaciones'] = 'sum'
+            
+            if columnas_evol:
+                evolucion = datos_periodo.groupby(datos_periodo['Fecha'].dt.date).agg(columnas_evol).reset_index()
+                
+                fig = go.Figure()
+                
+                if 'Firmaron' in evolucion.columns:
+                    fig.add_trace(go.Scatter(
+                        x=evolucion['Fecha'],
+                        y=evolucion['Firmaron'],
+                        mode='lines+markers',
+                        name='Firmaron',
+                        line=dict(color='#10b981', width=3),
+                        marker=dict(size=8)
+                    ))
+                
+                if 'Contactos' in evolucion.columns:
+                    fig.add_trace(go.Scatter(
+                        x=evolucion['Fecha'],
+                        y=evolucion['Contactos'],
+                        mode='lines+markers',
+                        name='Contactos',
+                        line=dict(color='#3b82f6', width=2),
+                        marker=dict(size=6),
+                        yaxis='y2'
+                    ))
+                
+                fig.update_layout(
+                    height=400,
+                    yaxis=dict(title="Firmados"),
+                    yaxis2=dict(title="Contactos", overlaying='y', side='right'),
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos de evolución disponibles")
+        else:
+            st.info("No hay datos de fecha disponibles")
+    
+    st.markdown("---")
+    
+    # Tabla detallada
+    st.subheader("📋 Detalle por Reclutador")
+    
+    if 'Firmaron' in datos_periodo.columns and 'ranking' in locals():
+        tabla_detalle = ranking.copy()
+        
+        # Agregar meta y diferencia
+        tabla_detalle['Meta'] = tabla_detalle['Reclutador'].apply(
+            lambda r: metas[metas['Reclutador'] == r]['Firmaron'].values[0] if not metas[metas['Reclutador'] == r].empty else 25
         )
-        st.plotly_chart(fig_funnel, use_container_width=True)
+        tabla_detalle['Diferencia'] = tabla_detalle['Firmaron'] - tabla_detalle['Meta']
+        tabla_detalle['% Efectividad'] = tabla_detalle['Efectividad'].apply(lambda x: f"{x}%")
+        
+        # Seleccionar columnas disponibles
+        columnas_tabla = ['Reclutador', 'Firmaron', 'Meta', 'Diferencia', '% Efectividad']
+        if 'Contactos' in tabla_detalle.columns:
+            columnas_tabla.append('Contactos')
+        if 'Entrevistas' in tabla_detalle.columns:
+            columnas_tabla.append('Entrevistas')
+        
+        tabla_detalle = tabla_detalle[columnas_tabla].sort_values('Firmaron', ascending=False)
+        
+        st.dataframe(tabla_detalle, use_container_width=True, hide_index=True)
 
-    st.markdown("### Tabla de Datos Mensuales")
-    st.dataframe(df_mensual_view, use_container_width=True)
+# ============================================================================
+# DASHBOARD DIARIO
+# ============================================================================
 
-# --- FOOTER ---
-st.caption(f"Última actualización de datos: {datetime.now().strftime('%H:%M:%S')}")
-if USAR_MOCK_DATA:
-    st.caption("⚠️ MODO DEMO: Usando datos generados aleatoriamente. Configura tus credenciales en el código para usar Airtable.")
+def render_dashboard_diario(reclutador, metricas_diarias, metas, config_dias):
+    """Renderiza el dashboard diario con selector de fecha"""
+    st.title("📅 Dashboard Diario")
+    
+    # Selector de fecha
+    col_fecha1, col_fecha2 = st.columns([1, 3])
+    
+    with col_fecha1:
+        fechas_disponibles = get_periodos_disponibles(metricas_diarias, 'diario')
+        
+        if not fechas_disponibles:
+            st.error("No hay fechas disponibles")
+            return
+        
+        fecha_seleccionada = st.selectbox(
+            "Seleccionar fecha:",
+            fechas_disponibles,
+            format_func=lambda x: x.strftime('%d/%m/%Y - %A') if hasattr(x, 'strftime') else str(x),
+            key="fecha_diaria"
+        )
+    
+    with col_fecha2:
+        if hasattr(fecha_seleccionada, 'strftime'):
+            st.info(f"📅 {fecha_seleccionada.strftime('%A, %d de %B %Y')}")
+        else:
+            st.info(f"📅 {fecha_seleccionada}")
+    
+    # Filtrar datos
+    datos_dia = metricas_diarias[
+        (metricas_diarias['Reclutador'] == reclutador) & 
+        (metricas_diarias['Fecha'].dt.date == fecha_seleccionada)
+    ]
+    
+    # Obtener configuración
+    meta_semanal = 25  # Valor por defecto
+    dias_laborables = 5  # Valor por defecto
+    
+    if not metas.empty and 'Reclutador' in metas.columns and 'Firmaron' in metas.columns:
+        meta_rec = metas[metas['Reclutador'] == reclutador]
+        if not meta_rec.empty:
+            meta_semanal = meta_rec['Firmaron'].values[0]
+    
+    if not config_dias.empty and 'Reclutador' in config_dias.columns:
+        config_rec = config_dias[config_dias['Reclutador'] == reclutador]
+        if not config_rec.empty and 'Dias_Generales' in config_rec.columns:
+            dias_laborables = config_rec['Dias_Generales'].values[0]
+    
+    meta_diaria = meta_semanal / dias_laborables
+    
+    # Calcular datos
+    firmados_dia = datos_dia['Firmaron'].sum() if not datos_dia.empty and 'Firmaron' in datos_dia.columns else 0
+    
+    # Calcular acumulado de la semana
+    inicio_semana = fecha_seleccionada - timedelta(days=fecha_seleccionada.weekday())
+    datos_semana = metricas_diarias[
+        (metricas_diarias['Reclutador'] == reclutador) & 
+        (metricas_diarias['Fecha'].dt.date >= inicio_semana) &
+        (metricas_diarias['Fecha'].dt.date <= fecha_seleccionada)
+    ]
+    acumulado_semana = datos_semana['Firmaron'].sum() if not datos_semana.empty and 'Firmaron' in datos_semana.columns else 0
+    dias_transcurridos = (fecha_seleccionada - inicio_semana).days + 1
+    
+    # Proyección
+    proyeccion = proyeccion_semanal(acumulado_semana, dias_transcurridos, dias_laborables)
+    
+    # KPIs
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        render_kpi_card(
+            "META DIARIA",
+            f"{int(meta_diaria)}",
+            f"Basado en {dias_laborables} días",
+            "#3b82f6",
+            "🎯"
+        )
+    
+    with col2:
+        cumplimiento = (firmados_dia / meta_diaria * 100) if meta_diaria > 0 else 0
+        render_kpi_card(
+            "ALCANZADO",
+            f"{int(firmados_dia)}",
+            f"{cumplimiento:.0f}% de meta",
+            get_color_efectividad(cumplimiento),
+            "📈"
+        )
+    
+    with col3:
+        cumple = "✓ SÍ" if firmados_dia >= meta_diaria else "✗ NO"
+        color = "#10b981" if firmados_dia >= meta_diaria else "#ef4444"
+        render_kpi_card(
+            "¿CUMPLIÓ META?",
+            cumple,
+            f"{int(firmados_dia)} de {int(meta_diaria)}",
+            color,
+            "✅" if cumple == "✓ SÍ" else "❌"
+        )
+    
+    with col4:
+        alcanzara = proyeccion >= meta_semanal
+        render_kpi_card(
+            "PROYECCIÓN SEMANAL",
+            f"{int(proyeccion)}",
+            "✓ Alcanzará" if alcanzara else "⚠ No alcanzará",
+            "#10b981" if alcanzara else "#ef4444",
+            "🔮"
+        )
+    
+    st.markdown("---")
+    
+    # Tabla de métricas
+    st.subheader("📊 Desglose de Métricas del Día")
+    
+    if not datos_dia.empty:
+        metricas = ['Publicaciones', 'Contactos', 'Citas', 'Entrevistas', 'Aceptados', 'Firmaron']
+        datos_tabla = []
+        
+        for metrica in metricas:
+            if metrica in datos_dia.columns:
+                alcanzado = datos_dia[metrica].sum()
+                
+                # Intentar obtener meta para esta métrica
+                meta_metrica = 0
+                if not metas.empty and metrica in metas.columns:
+                    meta_rec = metas[metas['Reclutador'] == reclutador]
+                    if not meta_rec.empty:
+                        meta_metrica = meta_rec[metrica].values[0] / dias_laborables
+                
+                datos_tabla.append({
+                    'Métrica': metrica,
+                    'Meta Diaria': int(meta_metrica) if meta_metrica > 0 else 'N/A',
+                    'Alcanzado': int(alcanzado),
+                    'Diferencia': int(alcanzado - meta_metrica) if meta_metrica > 0 else 'N/A',
+                    '% Cumplimiento': f"{(alcanzado/meta_metrica*100):.0f}%" if meta_metrica > 0 else "N/A"
+                })
+        
+        if datos_tabla:
+            df_tabla = pd.DataFrame(datos_tabla)
+            st.dataframe(df_tabla, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay métricas disponibles para mostrar")
+    else:
+        st.info(f"No hay datos registrados para {fecha_seleccionada.strftime('%d/%m/%Y') if hasattr(fecha_seleccionada, 'strftime') else fecha_seleccionada}")
+
+# ============================================================================
+# DASHBOARD SEMANAL
+# ============================================================================
+
+def render_dashboard_semanal(reclutador, metricas_diarias, metricas_semanales, metas):
+    """Renderiza el dashboard semanal con selector de semana"""
+    st.title("📈 Dashboard Semanal")
+    
+    # Selector de semana
+    col_semana1, col_semana2 = st.columns([1, 3])
+    
+    with col_semana1:
+        semanas_disponibles = get_periodos_disponibles(metricas_semanales, 'semanal')
+        
+        if not semanas_disponibles:
+            st.error("No hay semanas disponibles")
+            return
+        
+        semana_seleccionada = st.selectbox(
+            "Seleccionar semana:",
+            semanas_disponibles,
+            format_func=lambda x: f"Semana {x}",
+            key="semana_semanal"
+        )
+    
+    with col_semana2:
+        st.info(f"📅 Semana {semana_seleccionada}")
+    
+    # Filtrar datos
+    datos_semana = filtrar_por_periodo(metricas_semanales, semana_seleccionada, 'semanal')
+    datos_semana_rec = datos_semana[datos_semana['Reclutador'] == reclutador] if not datos_semana.empty else pd.DataFrame()
+    
+    if datos_semana_rec.empty:
+        st.warning(f"No hay datos para {reclutador} en la semana {semana_seleccionada}")
+        return
+    
+    # Calcular métricas
+    firmados = datos_semana_rec['Firmaron'].sum() if 'Firmaron' in datos_semana_rec.columns else 0
+    contactos = datos_semana_rec['Contactos'].sum() if 'Contactos' in datos_semana_rec.columns else 0
+    entrevistas = datos_semana_rec['Entrevistas'].sum() if 'Entrevistas' in datos_semana_rec.columns else 0
+    
+    # Obtener meta
+    meta = 25
+    if not metas.empty and 'Reclutador' in metas.columns and 'Firmaron' in metas.columns:
+        meta_rec = metas[metas['Reclutador'] == reclutador]
+        if not meta_rec.empty:
+            meta = meta_rec['Firmaron'].values[0]
+    
+    efectividad = calcular_efectividad(firmados, meta)
+    productividad = calcular_productividad(firmados, contactos)
+    calidad = calcular_calidad(firmados, entrevistas)
+    
+    # KPIs
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        render_kpi_card(
+            "EFECTIVIDAD",
+            f"{efectividad}%",
+            f"{int(firmados)} de {int(meta)}",
+            get_color_efectividad(efectividad),
+            "🎯"
+        )
+    
+    with col2:
+        color_prod = "#10b981" if productividad >= 15 else "#f59e0b" if productividad >= 10 else "#ef4444"
+        render_kpi_card(
+            "PRODUCTIVIDAD",
+            f"{productividad}%",
+            "Firmados/Contactos",
+            color_prod,
+            "💪"
+        )
+    
+    with col3:
+        color_cal = "#10b981" if calidad >= 50 else "#f59e0b" if calidad >= 35 else "#ef4444"
+        render_kpi_card(
+            "CALIDAD",
+            f"{calidad}%",
+            "Conversión entrevistas",
+            color_cal,
+            "⭐"
+        )
+    
+    with col4:
+        cumple = firmados >= meta
+        render_kpi_card(
+            "¿CUMPLIÓ META?",
+            "✓ SÍ" if cumple else "✗ NO",
+            f"{efectividad}% cumplimiento",
+            "#10b981" if cumple else "#ef4444",
+            "✅" if cumple else "❌"
+        )
+    
+    st.markdown("---")
+    
+    # Gráficos
+    col_graf1, col_graf2 = st.columns(2)
+    
+    with col_graf1:
+        st.subheader("🔽 Embudo de Reclutamiento")
+        
+        if not datos_semana_rec.empty:
+            embudo_data = {
+                'Etapa': ['Publicaciones', 'Contactos', 'Citas', 'Entrevistas', 'Aceptados', 'Firmaron'],
+                'Alcanzado': [
+                    datos_semana_rec['Publicaciones'].sum() if 'Publicaciones' in datos_semana_rec.columns else 0,
+                    datos_semana_rec['Contactos'].sum() if 'Contactos' in datos_semana_rec.columns else 0,
+                    datos_semana_rec['Citas'].sum() if 'Citas' in datos_semana_rec.columns else 0,
+                    datos_semana_rec['Entrevistas'].sum() if 'Entrevistas' in datos_semana_rec.columns else 0,
+                    datos_semana_rec['Aceptados'].sum() if 'Aceptados' in datos_semana_rec.columns else 0,
+                    datos_semana_rec['Firmaron'].sum() if 'Firmaron' in datos_semana_rec.columns else 0
+                ]
+            }
+            
+            fig = go.Figure(go.Funnel(
+                y=embudo_data['Etapa'],
+                x=embudo_data['Alcanzado'],
+                textinfo="value+percent initial",
+                marker={"color": ["#8b5cf6", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#ec4899"]}
+            ))
+            
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos para mostrar")
+    
+    with col_graf2:
+        st.subheader("📊 Comparativo con Promedio")
+        
+        # Calcular promedio de últimas 8 semanas
+        semanas_historicas = metricas_semanales[metricas_semanales['Reclutador'] == reclutador].tail(8)
+        
+        if not semanas_historicas.empty and 'Firmaron' in semanas_historicas.columns:
+            promedio_firmados = semanas_historicas['Firmaron'].mean()
+            
+            fig = go.Figure()
+            
+            fig.add_trace(go.Bar(
+                x=['Promedio 8 sem', 'Semana Actual'],
+                y=[promedio_firmados, firmados],
+                marker_color=['#94a3b8', get_color_efectividad(efectividad)],
+                text=[f"{promedio_firmados:.1f}", f"{firmados}"],
+                textposition='auto'
+            ))
+            
+            fig.add_hline(y=meta, line_dash="dash", line_color="red", annotation_text="Meta")
+            
+            fig.update_layout(height=400, showlegend=False, yaxis_title="Firmados")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No hay datos históricos suficientes")
+
+# ============================================================================
+# DASHBOARD MENSUAL
+# ============================================================================
+
+def render_dashboard_mensual(reclutador, metricas_semanales, metas):
+    """Renderiza el dashboard mensual con selector de mes"""
+    st.title("📊 Dashboard Mensual")
+    
+    # Selector de mes
+    col_mes1, col_mes2 = st.columns([1, 3])
+    
+    with col_mes1:
+        meses_disponibles = get_periodos_disponibles(metricas_semanales, 'mensual')
+        
+        if not meses_disponibles:
+            st.error("No hay meses disponibles")
+            return
+        
+        mes_seleccionado = st.selectbox(
+            "Seleccionar mes:",
+            meses_disponibles,
+            format_func=lambda x: pd.Period(x).strftime('%B %Y'),
+            key="mes_mensual"
+        )
+    
+    with col_mes2:
+        st.info(f"📅 {pd.Period(mes_seleccionado).strftime('%B %Y')}")
+    
+    # Filtrar datos
+    datos_mes = filtrar_por_periodo(metricas_semanales, mes_seleccionado, 'mensual')
+    datos_mes_rec = datos_mes[datos_mes['Reclutador'] == reclutador] if not datos_mes.empty else pd.DataFrame()
+    
+    if datos_mes_rec.empty:
+        st.warning(f"No hay datos para {reclutador} en {mes_seleccionado}")
+        return
+    
+    # Calcular métricas mensuales
+    total_firmados = datos_mes_rec['Firmaron'].sum() if 'Firmaron' in datos_mes_rec.columns else 0
+    
+    # Obtener meta
+    meta_semanal = 25
+    if not metas.empty and 'Reclutador' in metas.columns and 'Firmaron' in metas.columns:
+        meta_rec = metas[metas['Reclutador'] == reclutador]
+        if not meta_rec.empty:
+            meta_semanal = meta_rec['Firmaron'].values[0]
+    
+    meta_mensual = meta_semanal * 4
+    efectividad_mensual = calcular_efectividad(total_firmados, meta_mensual)
+    promedio_semanal = total_firmados / len(datos_mes_rec) if len(datos_mes_rec) > 0 else 0
+    
+    # KPIs
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        render_kpi_card(
+            "EFECTIVIDAD MENSUAL",
+            f"{efectividad_mensual}%",
+            f"{len(datos_mes_rec)} semanas",
+            get_color_efectividad(efectividad_mensual),
+            "📈"
+        )
+    
+    with col2:
+        render_kpi_card(
+            "TOTAL RECLUTADOS",
+            f"{int(total_firmados)}",
+            f"Meta: {int(meta_mensual)}",
+            "#3b82f6",
+            "👥"
+        )
+    
+    with col3:
+        sobre_meta = promedio_semanal >= meta_semanal
+        render_kpi_card(
+            "PROMEDIO SEMANAL",
+            f"{promedio_semanal:.1f}",
+            "✓ Sobre meta" if sobre_meta else "✗ Bajo meta",
+            "#10b981" if sobre_meta else "#ef4444",
+            "📊"
+        )
+    
+    with col4:
+        render_kpi_card(
+            "SEMANAS ACTIVAS",
+            f"{len(datos_mes_rec)}",
+            "En el mes",
+            "#3b82f6",
+            "📅"
+        )
+    
+    st.markdown("---")
+    
+    # Gráfico de evolución semanal del mes
+    st.subheader("📈 Evolución Semanal del Mes")
+    
+    if not datos_mes_rec.empty and 'Semana' in datos_mes_rec.columns and 'Firmaron' in datos_mes_rec.columns:
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=datos_mes_rec['Semana'],
+            y=datos_mes_rec['Firmaron'],
+            mode='lines+markers',
+            name='Firmaron',
+            line=dict(color='#10b981', width=3),
+            marker=dict(size=10)
+        ))
+        
+        fig.add_hline(y=meta_semanal, line_dash="dash", line_color="red", annotation_text="Meta Semanal")
+        
+        fig.update_layout(
+            height=400,
+            xaxis_title="Semana",
+            yaxis_title="Firmados",
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No hay datos de evolución disponibles")
+    
+    # Tabla detallada
+    st.subheader("📋 Detalle Semanal")
+    
+    if not datos_mes_rec.empty:
+        tabla_cols = ['Semana']
+        for col in ['Publicaciones', 'Contactos', 'Entrevistas', 'Firmaron']:
+            if col in datos_mes_rec.columns:
+                tabla_cols.append(col)
+        
+        if len(tabla_cols) > 1:
+            tabla_display = datos_mes_rec[tabla_cols].copy()
+            if 'Semana' in tabla_display.columns:
+                tabla_display = tabla_display.sort_values('Semana')
+            st.dataframe(tabla_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay suficientes columnas para mostrar")
+
+# ============================================================================
+# APLICACIÓN PRINCIPAL
+# ============================================================================
+
+def main():
+    # Header
+    st.title("📊 Dashboard de Reclutamiento")
+    st.markdown("**Sistema de Análisis de Desempeño**")
+    st.markdown("---")
+    
+    # Cargar datos
+    with st.spinner("🔄 Cargando datos de Airtable..."):
+        metricas_diarias = get_metricas_diarias()
+        metricas_semanales = get_metricas_semanales()
+        metas = get_metas_semanales()
+        config_dias = get_config_dias_laborables()
+    
+    # Verificar que hay datos
+    if metricas_diarias.empty and metricas_semanales.empty:
+        st.error("❌ No se pudieron cargar los datos. Verifica tu conexión a Airtable.")
+        
+        with st.expander("🔍 Ver información de diagnóstico"):
+            st.write("**Tablas intentadas:**")
+            st.write("- metricas_diarias")
+            st.write("- metricas_semanales")
+            st.write("- metas_semanales")
+            st.write("- config_dias_laborables")
+            
+            st.write("\n**Verifica:**")
+            st.write("1. Archivo .env existe y tiene las credenciales correctas")
+            st.write("2. Las tablas en Airtable existen con esos nombres exactos")
+            st.write("3. El API key tiene permisos de lectura")
+            st.write("4. La Base ID es correcta")
+        
+        st.stop()
+    
+    # Sidebar
+    st.sidebar.title("⚙️ Configuración")
+    
+    # Selector de tipo de dashboard
+    dashboard_tipo = st.sidebar.radio(
+        "Tipo de Dashboard",
+        ["🏢 Departamento", "👤 Individual"],
+        key="tipo_dashboard"
+    )
+    
+    st.sidebar.markdown("---")
+    
+    # Si es individual, mostrar opciones
+    if dashboard_tipo == "👤 Individual":
+        # Obtener lista de reclutadores
+        reclutadores = []
+        if not metricas_diarias.empty and 'Reclutador' in metricas_diarias.columns:
+            reclutadores.extend(metricas_diarias['Reclutador'].unique().tolist())
+        if not metricas_semanales.empty and 'Reclutador' in metricas_semanales.columns:
+            reclutadores.extend(metricas_semanales['Reclutador'].unique().tolist())
+        
+        reclutadores = sorted(list(set(reclutadores)))
+        
+        if not reclutadores:
+            st.error("No hay reclutadores en la base de datos")
+            st.stop()
+        
+        reclutador = st.sidebar.selectbox(
+            "📋 Seleccionar Reclutador",
+            reclutadores,
+            key="reclutador_individual"
+        )
+        
+        st.sidebar.markdown("---")
+        
+        vista = st.sidebar.radio(
+            "Vista",
+            ["📅 Diario", "📈 Semanal", "📊 Mensual"],
+            key="vista_individual"
+        )
+    
+    # Botón de actualizar
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Actualizar Datos", key="btn_actualizar"):
+        st.cache_data.clear()
+        st.rerun()
+    
+    st.sidebar.markdown("---")
+    st.sidebar.info(f"🕐 Última actualización: {datetime.now().strftime('%H:%M:%S')}")
+    
+    # Información de datos cargados
+    with st.sidebar.expander("📊 Info de Datos"):
+        st.write(f"**Registros diarios:** {len(metricas_diarias)}")
+        st.write(f"**Registros semanales:** {len(metricas_semanales)}")
+        st.write(f"**Metas configuradas:** {len(metas)}")
+        st.write(f"**Configuraciones:** {len(config_dias)}")
+    
+    # Renderizar dashboard según selección
+    if dashboard_tipo == "🏢 Departamento":
+        if not metricas_diarias.empty:
+            render_dashboard_departamento(metricas_diarias, metricas_semanales, metas)
+        else:
+            st.error("No hay datos diarios disponibles para el dashboard de departamento")
+    else:
+        if vista == "📅 Diario":
+            if not metricas_diarias.empty:
+                render_dashboard_diario(reclutador, metricas_diarias, metas, config_dias)
+            else:
+                st.error("No hay datos diarios disponibles")
+        elif vista == "📈 Semanal":
+            if not metricas_semanales.empty:
+                render_dashboard_semanal(reclutador, metricas_diarias, metricas_semanales, metas)
+            else:
+                st.error("No hay datos semanales disponibles")
+        else:  # Mensual
+            if not metricas_semanales.empty:
+                render_dashboard_mensual(reclutador, metricas_semanales, metas)
+            else:
+                st.error("No hay datos semanales disponibles para vista mensual")
+
+if __name__ == "__main__":
+    main()
