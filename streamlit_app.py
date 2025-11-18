@@ -5,8 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import numpy as np
 from pyairtable import Api
-import os
-from dotenv import load_dotenv
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -20,14 +18,28 @@ st.set_page_config(
 # ==========================================
 # CONFIGURACIÓN DE CONEXIÓN (LLENAR ESTO)
 # ==========================================
-# Cambia esto a False cuando tengas tus credenciales de Airtable listas
-USAR_MOCK_DATA = False
+# Cambia esto a False cuando tengas tus credenciales de Airtable listas en st.secrets
+USAR_MOCK_DATA = True 
 
-AIRTABLE_API_KEY = os.getenv('AIRTABLE_API_KEY')
-BASE_ID = os.getenv('AIRTABLE_BASE_ID')
+# Nombres de las tablas en Airtable
 TABLE_DIARIO = "Metricas"
 TABLE_SEMANAL = "Metricas_semanales"
 TABLE_MENSUAL = "Metricas_mensuales"
+
+# Cargar credenciales de forma segura desde st.secrets
+if not USAR_MOCK_DATA:
+    try:
+        # Asegúrate de configurar estos secretos en tu dashboard de Streamlit
+        AIRTABLE_API_KEY = st.secrets["AIRTABLE_API_KEY"]
+        BASE_ID = st.secrets["BASE_ID"]
+    except Exception as e:
+        st.error("⚠️ Error: No se encontraron las credenciales en los secretos de Streamlit.")
+        st.info("Asegúrate de configurar AIRTABLE_API_KEY y BASE_ID en la sección de Secrets de tu app o en .streamlit/secrets.toml")
+        st.stop()
+else:
+    # Valores temporales para modo prueba (no se usan realmente si MOCK es True)
+    AIRTABLE_API_KEY = "dummy_key"
+    BASE_ID = "dummy_base"
 
 # Rubros principales
 RUBROS_METRICAS = [
