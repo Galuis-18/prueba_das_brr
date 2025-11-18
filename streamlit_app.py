@@ -19,7 +19,7 @@ st.set_page_config(
 # CONFIGURACIÓN DE CONEXIÓN (LLENAR ESTO)
 # ==========================================
 # Cambia esto a False cuando tengas tus credenciales de Airtable listas en st.secrets
-USAR_MOCK_DATA = True 
+USAR_MOCK_DATA = False 
 
 # Nombres de las tablas en Airtable
 TABLE_DIARIO = "Metricas"
